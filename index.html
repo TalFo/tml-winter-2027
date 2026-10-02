@@ -137,6 +137,15 @@ details.more .inner{display:flex;flex-direction:column;gap:10px}
       <div class="row"><span class="lbl">Friends</span>
         <label class="check"><input type="checkbox" id="sepbeds" checked> Friends get their own beds (no shared double / couch)</label>
       </div>
+      <div class="row"><span class="lbl">Rooms min</span>
+        <div class="seg" id="rooms">
+          <button type="button" data-v="0" aria-pressed="true">Any</button>
+          <button type="button" data-v="2" aria-pressed="false">2+</button>
+          <button type="button" data-v="3" aria-pressed="false">3+</button>
+          <button type="button" data-v="4" aria-pressed="false">4+</button>
+        </div>
+      </div>
+      <div class="row"><span class="lbl">Counts as room</span><div class="row" id="spacetypes"></div></div>
       <div class="row"><span class="lbl">Pool</span>
         <div class="seg" id="pool">
           <button type="button" data-v="any" aria-pressed="true">Any</button>
@@ -157,9 +166,6 @@ details.more .inner{display:flex;flex-direction:column;gap:10px}
           <div class="row"><span class="lbl">Quality</span><div class="row" id="quals"></div></div>
           <div class="row"><span class="lbl">Meals</span><div class="row" id="meals"></div></div>
           <div class="row"><span class="lbl">Area</span><div class="row" id="areas"></div></div>
-          <div class="row"><span class="lbl">Bedrooms</span>
-            <div class="seg" id="beds"><button type="button" data-v="0" aria-pressed="true">Any</button><button type="button" data-v="2" aria-pressed="false">2+ bedrooms</button><button type="button" data-v="3" aria-pressed="false">3+ (own room each)</button></div>
-          </div>
           <div class="row"><span class="lbl">To slopes</span>
             <div class="rng"><input type="range" id="maxs" min="0" max="1" step="0.05" value="1" aria-label="Maximum distance to slopes in km"><output id="maxso"></output></div>
           </div>
@@ -206,14 +212,35 @@ function bedInfo(rt){
   if((m = lines.match(/bedroom\(s\):\s*(\d+)/))) bedrooms = +m[1];
   else if((m = name.match(/\((\d+)\s*bedrooms?\)/))) bedrooms = +m[1];
   const known = singles + doubles > 0;
-  return {singles, doubles, bedrooms, known};
+  // Separate sleeping spaces, as the listing names them
+  const arr = (rt?.d || []).map(l => l.toLowerCase().trim());
+  const count = (re, fallback) => { const n = (lines.match(re) || []).length; return n || (fallback.test(lines) ? 1 : 0); };
+  const sp = {
+    bedroom: bedrooms || 0,
+    cabin: count(/cabin \d+:/g, /cabin/),
+    alcove: count(/\d+(st|nd|rd|th) alcove/g, /alcove/),
+    mezzanine: (m = lines.match(/mezzanine\(s\):\s*(\d+)/)) ? +m[1] : count(/\d+(st|nd|rd|th) mezzanine/g, /mezzanine/),
+    hall: arr.some(l => /^hall\b/.test(l) && /sleep|bed/.test(l)) ? 1 : 0,
+    living: arr.some(l => /^\(living\) room\(s\):\s*(\d+ sleeping|sleeps)/.test(l)) ? 1 : 0
+  };
+  // A hotel room with no layout listed is simply one room
+  if(bedrooms == null && !sp.cabin && !sp.alcove && !sp.mezzanine && !sp.hall && !sp.living && !/studio/.test(name)) sp.bedroom = 1;
+  return {singles, doubles, bedrooms, known, sp};
 }
 
 // Per hotel + package: best price for each room setup
-function analyse(h, dur, minBeds = 0){
+const SPACE_TYPES = ["bedroom","cabin","alcove","mezzanine","hall","living"];
+const SPACE_LABEL = {bedroom:"Bedroom", cabin:"Cabin", alcove:"Alcove", mezzanine:"Mezzanine", hall:"Hall", living:"Living room"};
+const SPACE_WORD = {bedroom:["bedroom","bedrooms"], cabin:["cabin","cabins"], alcove:["alcove","alcoves"], mezzanine:["mezzanine","mezzanines"], hall:["hall bed","hall beds"], living:["living-room bed","living-room beds"]};
+function spaceCount(b, types){ return (types && types.length ? types : ["bedroom"]).reduce((n, k) => n + (b.sp[k] || 0), 0); }
+function spaceText(b){
+  const bits = SPACE_TYPES.filter(k => b.sp[k]).map(k => b.sp[k] + " " + SPACE_WORD[k][b.sp[k] > 1 ? 1 : 0]);
+  return bits.length ? bits.join(" + ") : "one open room";
+}
+function analyse(h, dur, minRooms = 0, types = ["bedroom"]){
   const off = h.offers[dur]; if(!off) return null;
   const rooms = off.rooms.map(([id, pax, price]) => ({id, pax, price, rt:h.roomTypes[id], b:bedInfo(h.roomTypes[id])}));
-  const quad = rooms.filter(r => r.pax === 4 && (r.b.bedrooms || 0) >= minBeds);
+  const quad = rooms.filter(r => r.pax === 4 && spaceCount(r.b, types) >= minRooms);
   const duo  = rooms.filter(r => r.pax === 2);
   const fourOK = r => r.b.known && (r.b.singles >= 2 || (r.b.bedrooms || 0) >= 3);    // couple takes the double (or 2 singles), friends get singles
   const twinOK = r => r.b.known && r.b.singles >= 2;
@@ -223,7 +250,7 @@ function analyse(h, dur, minBeds = 0){
   const two = {any: coupleRoom ? {a:coupleRoom, b:coupleRoom, pp:coupleRoom.price} : null, sep:null};
   const twin = cheapest(duo.filter(twinOK));
   if(coupleRoom && twin) two.sep = {a:coupleRoom, b:twin, pp:(coupleRoom.price + twin.price)/2};
-  if(minBeds > 2){ two.any = null; two.sep = null; }   // two rooms of 2 can never give everyone their own room
+  if(minRooms > 2 || !(types || []).includes("bedroom") && minRooms > 0){ two.any = null; two.sep = null; }   // two separate rooms = 2 bedrooms
   return {off, rooms, one, two};
 }
 
@@ -239,7 +266,7 @@ function pick(a, setup, sep){
 
 // --- State ---
 const store = { get(k, d){ try{ const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; }catch{ return d; } }, set(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch{} } };
-const DEF = {dur:"7", setup:"any", sep:true, maxp:4000, maxd:31, maxs:1, pool:"any", types:[], quals:[], meals:[], areas:[], beds:0, q:"", sort:"price", favonly:false};
+const DEF = {dur:"7", setup:"any", sep:true, maxp:4000, maxd:31, maxs:1, pool:"any", rooms:0, spaceTypes:["bedroom"], types:[], quals:[], meals:[], areas:[], beds:0, q:"", sort:"price", favonly:false};
 let S = Object.assign({}, DEF, store.get("tml27-filters", {}));
 let favs = new Set(store.get("tml27-favs", []));
 let selected = null;
@@ -309,7 +336,8 @@ function color(pp, sorted){ const t = sorted.length > 1 ? sorted.filter(x => x <
 // --- Render ---
 function render(){
   store.set("tml27-filters", S);
-  seg("dur", "dur"); seg("setup", "setup"); seg("beds", "beds", Number); seg("pool", "pool");
+  seg("dur", "dur"); seg("setup", "setup"); seg("rooms", "rooms", Number); seg("pool", "pool");
+  chips("spacetypes", "spaceTypes", SPACE_TYPES, k => SPACE_LABEL[k]);
   $("sepbeds").checked = S.sep; $("favonly").checked = S.favonly; $("q").value = S.q; $("sort").value = S.sort;
   $("maxp").value = S.maxp; $("maxpo").textContent = S.maxp >= 4000 ? "any" : eur(S.maxp);
   $("maxd").value = S.maxd; $("maxdo").textContent = S.maxd >= 31 ? "any" : km(+S.maxd);
@@ -321,7 +349,7 @@ function render(){
 
   const rows = [];
   for(const h of DATA){
-    const a = analyse(h, S.dur, S.beds); if(!a) continue;
+    const a = analyse(h, S.dur, S.rooms, S.spaceTypes); if(!a) continue;
     const p = pick(a, S.setup, S.sep); if(!p) continue;
     if(p.pp > S.maxp && S.maxp < 4000) continue;
     if(S.maxd < 31 && (h.distFest ?? 99) > S.maxd) continue;
@@ -377,8 +405,7 @@ function setupText(p){
 }
 function bedSummary(b){
   if(!b.known) return "· bed layout not listed";
-  const bits = [];
-  if(b.bedrooms) bits.push(b.bedrooms + " bedroom" + (b.bedrooms > 1 ? "s" : ""));
+  const bits = [spaceText(b)];
   if(b.singles) bits.push(b.singles + " single");
   if(b.doubles) bits.push(b.doubles + " double/sofa");
   return "· " + bits.join(", ");
