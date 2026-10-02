@@ -158,7 +158,7 @@ details.more .inner{display:flex;flex-direction:column;gap:10px}
           <div class="row"><span class="lbl">Meals</span><div class="row" id="meals"></div></div>
           <div class="row"><span class="lbl">Area</span><div class="row" id="areas"></div></div>
           <div class="row"><span class="lbl">Bedrooms</span>
-            <div class="seg" id="beds"><button type="button" data-v="0" aria-pressed="true">Any</button><button type="button" data-v="2" aria-pressed="false">2+ bedrooms</button></div>
+            <div class="seg" id="beds"><button type="button" data-v="0" aria-pressed="true">Any</button><button type="button" data-v="2" aria-pressed="false">2+ bedrooms</button><button type="button" data-v="3" aria-pressed="false">3+ (own room each)</button></div>
           </div>
           <div class="row"><span class="lbl">To slopes</span>
             <div class="rng"><input type="range" id="maxs" min="0" max="1" step="0.05" value="1" aria-label="Maximum distance to slopes in km"><output id="maxso"></output></div>
@@ -210,12 +210,12 @@ function bedInfo(rt){
 }
 
 // Per hotel + package: best price for each room setup
-function analyse(h, dur){
+function analyse(h, dur, minBeds = 0){
   const off = h.offers[dur]; if(!off) return null;
   const rooms = off.rooms.map(([id, pax, price]) => ({id, pax, price, rt:h.roomTypes[id], b:bedInfo(h.roomTypes[id])}));
-  const quad = rooms.filter(r => r.pax === 4);
+  const quad = rooms.filter(r => r.pax === 4 && (r.b.bedrooms || 0) >= minBeds);
   const duo  = rooms.filter(r => r.pax === 2);
-  const fourOK = r => r.b.known && r.b.singles >= 2;    // couple takes the double (or 2 singles), friends get singles
+  const fourOK = r => r.b.known && (r.b.singles >= 2 || (r.b.bedrooms || 0) >= 3);    // couple takes the double (or 2 singles), friends get singles
   const twinOK = r => r.b.known && r.b.singles >= 2;
   const cheapest = a => a.reduce((x, y) => (!x || y.price < x.price) ? y : x, null);
   const one = {any: cheapest(quad), sep: cheapest(quad.filter(fourOK))};
@@ -223,6 +223,7 @@ function analyse(h, dur){
   const two = {any: coupleRoom ? {a:coupleRoom, b:coupleRoom, pp:coupleRoom.price} : null, sep:null};
   const twin = cheapest(duo.filter(twinOK));
   if(coupleRoom && twin) two.sep = {a:coupleRoom, b:twin, pp:(coupleRoom.price + twin.price)/2};
+  if(minBeds > 2){ two.any = null; two.sep = null; }   // two rooms of 2 can never give everyone their own room
   return {off, rooms, one, two};
 }
 
@@ -320,7 +321,7 @@ function render(){
 
   const rows = [];
   for(const h of DATA){
-    const a = analyse(h, S.dur); if(!a) continue;
+    const a = analyse(h, S.dur, S.beds); if(!a) continue;
     const p = pick(a, S.setup, S.sep); if(!p) continue;
     if(p.pp > S.maxp && S.maxp < 4000) continue;
     if(S.maxd < 31 && (h.distFest ?? 99) > S.maxd) continue;
@@ -332,7 +333,6 @@ function render(){
     if(S.quals.length && !S.quals.includes(h.quality)) continue;
     if(S.meals.length && !S.meals.includes(h.meal)) continue;
     if(S.areas.length && !S.areas.includes(areaOf(h))) continue;
-    if(S.beds && !(p.kind === "two" || p.r.some(r => (r.b.bedrooms || 0) >= S.beds))) continue;
     if(S.q && !h.name.toLowerCase().includes(S.q.toLowerCase())) continue;
     if(S.favonly && !favs.has(h.id)) continue;
     rows.push({h, a, p});
@@ -389,9 +389,11 @@ function card(h, a, p){
   el.className = "card" + (selected === h.id ? " sel" : ""); el.id = "h" + h.id; el.tabIndex = 0;
   const img = IMGS[h.id] ? `url('${IMGS[h.id]}')` : "none";
   const pills = [];
-  if(p.kind === "one" ? (p.r[0].b.known && p.r[0].b.singles >= 2) : (p.r[1].b.known && p.r[1].b.singles >= 2)) pills.push('<span class="pill good">Friends: own beds</span>');
+  if(p.kind === "one" ? (p.r[0].b.known && (p.r[0].b.singles >= 2 || (p.r[0].b.bedrooms || 0) >= 3)) : (p.r[1].b.known && p.r[1].b.singles >= 2)) pills.push('<span class="pill good">Friends: own beds</span>');
   else pills.push('<span class="pill warn">Check bed layout</span>');
-  if(p.kind === "one" && (p.r[0].b.bedrooms || 0) >= 2) pills.push('<span class="pill good">2+ bedrooms</span>');
+  const nb = p.kind === "one" ? (p.r[0].b.bedrooms || 0) : 0;
+  if(nb >= 3) pills.push('<span class="pill good">' + nb + ' bedrooms: own room each</span>');
+  else if(nb >= 2) pills.push('<span class="pill good">2 bedrooms</span>');
   if((h.fac || []).includes("POOL")) pills.push('<span class="pill">Pool</span>');
   if(h.type === "Shared Chalet") pills.push('<span class="pill warn">Shared with others</span>');
   if((h.distFest ?? 99) > 5) pills.push('<span class="pill warn">Shuttle needed</span>');
