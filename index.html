@@ -57,7 +57,17 @@ details.more>summary{cursor:pointer;font-size:.82rem;color:var(--accent);list-st
 details.more>summary::-webkit-details-marker{display:none}
 details.more[open]>summary{margin-bottom:8px}
 details.more .inner{display:flex;flex-direction:column;gap:10px}
-.bar{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 16px;font-size:.82rem;color:var(--muted);border-bottom:1px solid var(--line);flex-wrap:wrap}
+[hidden]{display:none!important}
+@media (max-width:860px){header .sub{font-size:.78rem}.legend{font-size:.62rem;line-height:1.45;padding:5px 7px;max-width:58vw}}
+.fsum{padding:8px 16px;font-size:.8rem;color:var(--muted);border-bottom:1px solid var(--line);cursor:pointer;display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.fsum b{color:var(--ink)}
+.fsum .tag{background:var(--accent-soft);color:var(--accent);border-radius:999px;padding:1px 8px;font-weight:700}
+.barbtns{display:flex;gap:6px;flex-wrap:wrap}
+.chip.strong{border-color:var(--accent);color:var(--accent);font-weight:700}
+.app.nomap{grid-template-columns:minmax(0,1fr)}
+.app.nomap .mapwrap{display:none}
+.app.nomap .list{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,460px),1fr));align-content:start}
+.bar{background:var(--bg);display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 16px;font-size:.82rem;color:var(--muted);border-bottom:1px solid var(--line);flex-wrap:wrap}
 .bar b{color:var(--ink);font-variant-numeric:tabular-nums}
 .list{overflow:auto;flex:1;min-height:0;padding:12px 16px 24px;display:flex;flex-direction:column;gap:10px}
 .card{flex-shrink:0;background:var(--panel);border:1px solid var(--line);border-radius:10px;display:grid;grid-template-columns:112px minmax(0,1fr);overflow:hidden;cursor:pointer;transition:border-color .15s}
@@ -121,6 +131,9 @@ details.more .inner{display:flex;flex-direction:column;gap:10px}
   .left{border-right:0}
   .list{overflow:visible}
   .mapwrap{position:sticky;bottom:0;order:-1;height:45vh;top:0;z-index:5}
+  .bar{position:sticky;top:45vh;z-index:4}
+  .app.nomap{grid-template-rows:auto}
+  .app.nomap .bar{top:0}
 }
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
@@ -130,7 +143,8 @@ details.more .inner{display:flex;flex-direction:column;gap:10px}
       <h1>Tomorrowland Winter 2027 · Stay finder</h1>
       <div class="sub">Alpe d'Huez · 4 travellers (1 couple + 2 friends) · own transport · prices per person incl. festival ticket &amp; ski pass · snapshot from the official simulator, <span id="snap"></span>. Unofficial planning tool: prices may change, always confirm in the official shop.</div>
     </header>
-    <div class="filters">
+    <div class="fsum" id="fsum" role="button" tabindex="0" hidden></div>
+    <div class="filters" id="filters">
       <div class="row"><span class="lbl">Package</span>
         <div class="seg" id="dur">
           <button type="button" data-v="7" aria-pressed="true">7 days · 20–27 Mar</button>
@@ -193,7 +207,7 @@ details.more .inner{display:flex;flex-direction:column;gap:10px}
         <label class="check"><input type="checkbox" id="favonly"> ★ only</label>
       </div>
     </div>
-    <div class="bar"><span><b id="count">0</b> places match · <span id="favn"></span></span><button type="button" class="chip" id="reset">Reset filters</button></div>
+    <div class="bar"><span><b id="count">0</b> places match · <span id="favn"></span></span><span class="barbtns"><button type="button" class="chip strong" id="ftoggle" aria-expanded="true">Hide filters ▴</button><button type="button" class="chip" id="mtoggle">Hide map</button><button type="button" class="chip" id="reset">Reset</button></span></div>
     <div class="list" id="list"></div>
   </section>
   <section class="mapwrap"><div id="map"></div></section>
@@ -530,6 +544,43 @@ $("maxs").oninput = e => { S.maxs = +e.target.value; render(); };
 $("q").oninput = e => { S.q = e.target.value; render(); };
 $("sort").onchange = e => { S.sort = e.target.value; render(); };
 $("reset").onclick = () => { S = Object.assign({}, DEF); render(); };
+
+// Collapsible filter panel + hideable map (remembered per device)
+const narrow = matchMedia("(max-width:860px)").matches;
+let ui = Object.assign({filtersOpen: !narrow, mapOn: true}, store.get("tml27-ui", {}));
+function filterSummary(){
+  const bits = [S.dur === "7" ? "7 days" : "4 days"];
+  if(S.setup !== "any") bits.push(S.setup === "one" ? "1 unit for 4" : "2 rooms of 2");
+  if(S.sep) bits.push("friends own beds");
+  if(S.rooms) bits.push(S.rooms + "+ rooms" + (S.spaceTypes.length > 1 || S.spaceTypes[0] !== "bedroom" ? " (" + S.spaceTypes.map(k => SPACE_LABEL[k].toLowerCase()).join("/") + ")" : ""));
+  S.boards.forEach(b => bits.push(BOARD[b].label));
+  S.need.forEach(k => bits.push(FAC[k].label));
+  if(S.pool !== "any") bits.push(S.pool === "yes" ? "with pool" : "no pool");
+  if(S.maxp < 4000) bits.push("≤ " + eur(S.maxp) + " pp");
+  if(S.maxd < 31) bits.push("≤ " + km(+S.maxd) + " to festival");
+  if(S.maxs < 1) bits.push("≤ " + km(+S.maxs) + " to slopes");
+  [...S.types, ...S.quals, ...S.areas].forEach(v => bits.push(v));
+  if(S.q) bits.push("“" + S.q + "”");
+  if(S.favonly) bits.push("★ only");
+  return bits;
+}
+function applyUi(){
+  store.set("tml27-ui", ui);
+  $("filters").hidden = !ui.filtersOpen;
+  $("fsum").hidden = ui.filtersOpen;
+  $("fsum").innerHTML = "<b>Filters:</b> " + filterSummary().map(b => '<span class="tag">' + b + "</span>").join("") + ' <span style="color:var(--accent)">Edit ▾</span>';
+  $("ftoggle").textContent = ui.filtersOpen ? "Hide filters ▴" : "Show filters ▾";
+  $("ftoggle").setAttribute("aria-expanded", ui.filtersOpen);
+  document.querySelector(".app").classList.toggle("nomap", !ui.mapOn);
+  $("mtoggle").textContent = ui.mapOn ? "Hide map" : "Show map";
+  if(ui.mapOn) setTimeout(() => map.invalidateSize(), 50);
+}
+$("ftoggle").onclick = () => { ui.filtersOpen = !ui.filtersOpen; applyUi(); };
+$("fsum").onclick = () => { ui.filtersOpen = true; applyUi(); };
+$("fsum").onkeydown = e => { if(e.key === "Enter" || e.key === " "){ e.preventDefault(); ui.filtersOpen = true; applyUi(); } };
+$("mtoggle").onclick = () => { ui.mapOn = !ui.mapOn; applyUi(); };
+const _render = render;
+render = function(){ _render(); applyUi(); };
 render();
 </script>
 
